@@ -7,7 +7,11 @@ def main():
           description="Bitboard Chess C module",
           author="Timon",
           ext_modules=[
-              Extension("cchess", ["module.c"])
+              Extension(
+                  "cchess",
+                  ["module.c", "board.c"],
+                  include_dirs=["cchess"]
+              )
           ])
 
 
