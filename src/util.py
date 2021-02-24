@@ -1,6 +1,7 @@
 import surge
 import chess
 
+
 def pprint_bitboard(bitboard):
     files = (" " * 3).join([c for c in "ABCDEFGH"])
     line = "---".join("+" * 9)
@@ -18,18 +19,20 @@ def pprint_bitboard(bitboard):
     print(" " * 3 + line)
 
 
-def show_pos(position: surge.Position):
+def pprint_pos(position: surge.Position):
     print(chess.Board(position.fen()))
 
 
-surge.init()
-pos = surge.Position()
-pos.reset(pos)
+def perf(pos, depth):
+    if depth <= 1:
+        return len(pos.legals())
 
-print("len", len(pos.legals()))
-for m in pos.legals():
-    pos.play(m)
-    
-    print(pos.fen())
-    # show_pos(pos)
-    pos.undo(m)
+    n = 0
+    for m in pos.legals():
+        pos.play(m)
+        n += perf(pos, depth - 1)
+        pos.undo(m)
+
+    return n
+
+
