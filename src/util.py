@@ -1,5 +1,6 @@
 import surge
 import chess
+import logging
 
 
 def pprint_bitboard(bitboard):
@@ -19,8 +20,8 @@ def pprint_bitboard(bitboard):
     print(" " * 3 + line)
 
 
-def pprint_pos(position: surge.Position):
-    print(chess.Board(position.fen()))
+def pprint_pos(position: surge.Position, level):
+    logging.log(level, chess.Board(position.fen()))
 
 
 def perf(pos, depth):
