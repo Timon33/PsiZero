@@ -142,7 +142,7 @@ def train():
         util.pprint_pos(pos, logging.WARNING)
 
     logging.error(f"game over: {pos_score}")
-    util.pprint_pos(pos, logging.ERROR)
+    util.pprint_pos(pos, logging.ERROR)gftr 
 
 
 def init():
