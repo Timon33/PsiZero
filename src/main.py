@@ -23,7 +23,7 @@ class EndState:
 LR = 0.001
 TIME_TRSH = 1
 TIME_PER_MOVE = 0
-DEPTH = 1
+DEPTH = 3
 
 training_data = {}
 
@@ -121,14 +121,14 @@ def play(pos: surge.Position, model: neuralnet.NN, side: Color, time: float, dep
 
 def train():
     pos = surge.Position()
-    surge.Position.set("k7/2K5/8/8/8/8/8/1PR5 w - - 0 1", pos)
+    surge.Position.set("2Rr2k1/4pppp/8/8/8/8/8/2R4K b - - 0 1", pos)
 
     model = neuralnet.NN()
     loss_function = nn.MSELoss()
     optim = torch.optim.SGD(model.parameters(), lr=0.001)
 
-    # print(play(pos, model, Color(pos.color_to_play() != 0), 0, 2))
-    # return
+    print(play(pos, model, Color(pos.color_to_play() != 0), 0, DEPTH))
+    return
     game_over = False
 
     while True:
@@ -142,7 +142,7 @@ def train():
         util.pprint_pos(pos, logging.WARNING)
 
     logging.error(f"game over: {pos_score}")
-    util.pprint_pos(pos, logging.ERROR)gftr 
+    util.pprint_pos(pos, logging.ERROR)
 
 
 def init():

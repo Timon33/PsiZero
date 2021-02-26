@@ -1,6 +1,3 @@
-#%%
-%%latex
-
 # Chess AI
 
 Possible Moves `M(S)` from State `S(t)` to State `S(t+1)`
