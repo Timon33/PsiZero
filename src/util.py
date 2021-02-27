@@ -1,6 +1,8 @@
 import surge
 import chess
+import torch
 import logging
+import numpy as np
 
 
 def pprint_bitboard(bitboard):
@@ -35,5 +37,23 @@ def perf(pos, depth):
         pos.undo(m)
 
     return n
+
+# convert a position to the tensor representation used by the nn
+def board_2_tensor(board: chess.Board) -> torch.tensor:
+    nums = np.empty(13, dtype=np.uint64)
+    for i in range(6):
+        nums[i] = int(board.pieces(i + 1, chess.WHITE))
+        nums[i + 6] = int(board.pieces(i + 1, chess.BLACK))
+
+    nums[12] = 1 << board.ep_square if board.has_legal_en_passant() else 0
+
+    bits = np.unpackbits(nums.view(np.uint8))
+    return torch.tensor(bits).float()
+
+def moves_2_str(moves):
+    s = ""
+    for m in moves:
+        s += str(m) + " "
+    return s + "\n"
 
 

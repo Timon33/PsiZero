@@ -1,155 +1,142 @@
-import surge
+import chess
 import torch
-import torch.nn as nn
 import numpy as np
-from enum import Flag, Enum
 import logging
+import pickle
+import os
 
 import neuralnet
 import util
 
 
-class Color(Flag):
-    WHITE = False
-    BLACK = True
+# return the score of the position - black, + white and if the game is over
+def eval_position(board: chess.Board, model: neuralnet.NN) -> (float, bool):
+    
+    # doesn't use is_game_over to get more performance
 
+    if board.is_checkmate():
+        # if white is checkmate black gets an -infinit score and inf for black in checkmate
+        return (float("-inf"), True) if board.turn else (float("inf"), True)
 
-class EndState:
-    WHITE_MATE = float("-inf")  # white is checkmate
-    BLACK_MATE = float("inf")  # black is checkmate
-    DRAW = float(0)
+    if board.is_stalemate() or board.is_insufficient_material():
+        # 0 score for a draw
+        return 0, True
 
+    # if the game is not over evaluate the board using the nn
+    return model.forward(util.board_2_tensor(board)), False
+    # return static_material_eval(board), False
 
-LR = 0.001
+# stop exploring if the time unit for this branch fall below this threshold
 TIME_TRSH = 1
-TIME_PER_MOVE = 0
-DEPTH = 3
 
-training_data = {}
+# a tree search like minmax, but no alpha beta pruning. instead we eval each possition and allocate units of time depending on the score
+def dynamic_move_search(board, model, time, is_maximizing) -> (float, chess.Move):
 
+    # first, eval all next moves. this is used to allocate the time proportional later
+    moves = list(board.generate_legal_moves())
+    scores = np.empty(len(moves))
+    gameovers = np.empty(len(moves), dtype=bool)
 
-def side_from_pos(pos):
-    return Color(pos.color_to_play() != 0)
-
-
-def pos_2_tensor(pos: surge.Position) -> torch.tensor:
-    bit_state = pos.bit_state()
-    bits = np.unpackbits(bit_state.view(np.uint8))
-    return torch.tensor(bits).float()
-
-
-# gives a position a score from -1 to 1 (Black - White) and if the game is over
-def score(pos: surge.Position, model) -> (float, bool):
-
-    moves = pos.legals()
-    side = side_from_pos(pos)
-    if len(moves) == 0:
-        # no more moves for the side -> end of game
-        if pos.in_check():
-            # checkmate
-            return (EndState.WHITE_MATE, True) if side == Color.WHITE else (EndState.BLACK_MATE, True)
-        else:
-            # stalemate
-            return EndState.DRAW, True
-
-    # return model.forward(pos_2_tensor(pos)).float(), False
-    type_value = [1, 3, 3, 5, 9, 50, 0, 0, -1, -3, -3, -5, -9, -50, 0]
-    bit_state = pos.bit_state()
-    score = 0
-    for type, bits in enumerate(bit_state):
-        score += bin(bits).count("1") * type_value[type]
-    return score, False
-
-
-def play(pos: surge.Position, model: neuralnet.NN, side: Color, time: float, depth):
-    taps = "\t" * (DEPTH - depth)
-    logging.debug(f"{taps}-------------------------------------------------")
-    logging.debug(f"{taps}exploring pos with depth {depth} for side {side}:")
-    util.pprint_pos(pos, logging.DEBUG)
-
-    # generate the moves
-    moves = pos.legals()
-    # best_series = []
-
-    scores = np.array([float(0)] * len(moves))
-    is_game_over = [False] * len(moves)
-
-    # eval all the possible moves
     for i, move in enumerate(moves):
-        pos.play(move)
-        # eval the new pos and store the result
-        scores[i], is_game_over[i] = score(pos, model)
-        pos.undo(move)
+            board.push(move)
+            scores[i], gameovers[i] = eval_position(board, model)
 
-    if depth > 0:
+            # if there is a checkmate for the opposide side, it will choose it and stop exploring
+            if board.is_checkmate() and board.turn is not is_maximizing:
+                board.pop()
+                return scores[i], move
 
-        # if there is time left split it proportional to the positions score and search deeper
-        '''if scores.sum() != 0:
-            norm = (scores + np.min(scores)) / np.sum(np.abs(scores))
+            board.pop()
+
+    # if ther is no more time for this branch...
+    if time < TIME_TRSH:
+        # ...find the best move for the plaing side
+        if is_maximizing:
+            return np.max(scores), moves[np.argmax(scores)]
         else:
-            norm = np.array([1 / len(moves)] * len(moves))'''
+            return np.min(scores), moves[np.argmin(scores)]
 
-        best_move = None
-        best_max = 0
-
-        # best = [[]] * len(moves)
-
-        # recursively explore all subtrees and update the scores
-        for i, move in enumerate(moves):
-            logging.debug(f"{taps}exploring move {move}")
-
-            if is_game_over[i]:
-                logging.debug("CHECKMATE --- SKIPING")
-                continue
-
-            pos.play(move)
-            scores[i], is_game_over[i], _ = play(pos, model, Color(not side.value), time, depth - 1)
-            pos.undo(move)
-
-    logging.debug(f"{taps}scores: {scores}")
-
-    # min max the results
-    if side == Color.WHITE:
-        # white will play the move that gives the max score
-        logging.debug(f"{taps}best found. max: {np.max(scores)}, best: {moves[np.argmax(scores)]}")
-        return np.max(scores), is_game_over[np.argmax(scores)], moves[np.argmax(scores)]
+    # if there still is time, allocate it proportional to the score and keep exploring
+    if is_maximizing:
+        scaled_scores = np.nan_to_num(scores) - np.min(scores) + 0.1
     else:
-        # black will play the move that gives the min score
-        logging.debug(f"{taps}best found. min: {np.min(scores)}, best: {moves[np.argmin(scores)]}")
-        return np.min(scores), is_game_over[np.argmin(scores)], moves[np.argmax(scores)]
+        scaled_scores = np.nan_to_num(-scores) - np.min(-scores) + 0.1
+    time_factors = scaled_scores / np.sum(scaled_scores)
 
 
-def train():
-    pos = surge.Position()
-    surge.Position.set("2Rr2k1/4pppp/8/8/8/8/8/2R4K b - - 0 1", pos)
+    if is_maximizing:
+        for move, is_gameover, time_factor in zip(moves, gameovers, time_factors):
+            if is_gameover:
+                continue
+            board.push(move)
+            scores[i], _ = dynamic_move_search(board, model, time * time_factor, False)
+            board.pop()
 
-    model = neuralnet.NN()
-    loss_function = nn.MSELoss()
+        # print("\t" * calls, scores, gameovers)
+        return np.max(scores), moves[np.argmax(scores)]
+
+    else:
+        for move, is_gameover, time_factor in zip(moves, gameovers, time_factors):
+            if is_gameover:
+                continue
+            board.push(move)
+            scores[i], _ = dynamic_move_search(board, model, time * time_factor, True)
+            board.pop()
+
+        # print("\t" * calls, scores, gameovers)
+        return np.min(scores), moves[np.argmin(scores)]
+
+# plays a game against itself, return all positions form the game and the final score
+def play_game(time: float, model: neuralnet.NN):
+    b = chess.Board()
+    positions = np.empty([0, 832])
+    predictions = np.empty(832)
+
+    game_over = False
+    i = 0
+    while not game_over:
+        if i > 100:
+            return positions, 0
+
+        s, move = dynamic_move_search(b, model, time, b.turn)
+
+        positions = np.append(positions, util.board_2_tensor(b))
+        predictions[i] = s
+
+        b.push(move)
+        game_over = b.is_game_over()
+        i += 1
+
+    res = 0
+    if b.is_checkmate():
+        res = 1 if b.turn else -1
+    
+    return positions, predictions, res
+
+
+def train(model, iters, time):
+
+    loss_f = torch.nn.MSELoss(reduction="none")
     optim = torch.optim.SGD(model.parameters(), lr=0.001)
 
-    print(play(pos, model, Color(pos.color_to_play() != 0), 0, DEPTH))
-    return
-    game_over = False
+    try:
+        for _ in range(iters):
+            X, P, Y = play_game(time, model)
+            model.zero_grad()
+            loss = loss_f(P, torch.tensor(Y))
+            loss.backward()
+            optim.step()
 
-    while True:
-        pos_score, game_over, best_move = play(pos, model, side_from_pos(pos), 0, DEPTH)
-        logging.warning(f"score {pos_score}, move: {best_move}")
+            print(loss)
 
-        if game_over:
-            break
+    except KeyboardInterrupt:
+        with open(model_path, "wb") as f:
+            pickle.dump(model, f)
 
-        pos.play(best_move)
-        util.pprint_pos(pos, logging.WARNING)
+project_dir = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(project_dir, "../models/model")
 
-    logging.error(f"game over: {pos_score}")
-    util.pprint_pos(pos, logging.ERROR)
+with open(model_path, "rb") as f:
+    model = pickle.load(f)
 
-
-def init():
-    surge.init()
-    logging.basicConfig(level=logging.INFO, format="")
-    train()
-
-
-if __name__ == "__main__":
-    init()
+train(model, 100, 3)
